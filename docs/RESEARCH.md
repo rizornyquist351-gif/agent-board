@@ -79,7 +79,24 @@
 
 格式是实测得来、未被官方文档承诺，Claude Code 升级可能改变 → 读取逻辑必须**集中在一个适配器模块里**，字段缺失或多出时容错，不能让整个看板崩掉。
 
-## 六、未完成的调研
+## 六、后台运行 Claude Code（第 1 阶段，2026-11-23 实测，Claude Code 2.1.330）
+
+**执行 agent**：`claude -p "<任务>" --output-format stream-json --verbose --permission-mode <模式> --max-budget-usd <上限>`
+- 每行一个 JSON 事件。有用的几种：
+  - `{"type":"system","subtype":"init", "session_id", "model", "permissionMode", ...}`
+  - `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{...}}, {"type":"text","text":"..."}]}}` → agent 在做什么
+  - `{"type":"user","message":{"content":[{"type":"tool_result","is_error":false,"content":"..."}]}}` → 执行结果
+  - `{"type":"result","subtype":"success"|"error_max_budget_usd"|..., "is_error", "result", "total_cost_usd", "num_turns", "session_id", "permission_denials":[]}` → 结束
+  - 另有大量 `stream_event`、`rate_limit_event` 等，可忽略。
+- 实测"新建文件并 cat"：2 轮、约 0.003 美元（haiku）。
+
+**规划 agent**：`claude -p "<拆任务>" --output-format json --json-schema '<schema>' --tools "Read,Glob,Grep"`
+- 结果在 `structured_output` 字段，已按 schema 校验。
+- **只读工具很重要**：用 `--permission-mode plan` 时 agent 自行大量探索，0.1 美元预算被用超（`error_max_budget_usd`）；改为只给 Read/Glob/Grep 后 6 轮约 0.002 美元。
+
+**其他有用参数**：`-w/--worktree [name]`（自动建 worktree）、`--session-id`、`--resume`、`--model`、`--append-system-prompt`。
+
+## 七、未完成的调研
 
 - 各小项目的活跃度（最近提交、issue 数）未逐一核实。
 - 开启 Agent Teams 后 `config.json` 的完整格式（需要在交互式会话中实测）。
