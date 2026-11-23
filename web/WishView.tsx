@@ -1,9 +1,9 @@
-// 第 1 阶段：许愿视图。用户只需要：写一句话 → 点"开始" → 看 → 点"通过"或"打回"。
+// 许愿视图。用户只需要：写一句话 → 点"开始" → 看 → 点"通过"或"打回"。
 import { useEffect, useRef, useState } from 'react';
-import type { PlannedTask, Wish, WishTask } from '../src/shared/wish.ts';
+import type { PlannedTask, RunningAgent, TaskRole, Wish, WishTask } from '../src/shared/wish.ts';
 import { timeAgo } from './board.ts';
 import { post, type WishesPayload } from './useBoard.ts';
-import { TASK_STATUS, WISH_STATUS, doneCount, groupWishes, money } from './wishText.ts';
+import { ROLE, TASK_STATUS, WISH_STATUS, doneCount, groupWishes, money, waitingFor } from './wishText.ts';
 
 export function WishView({ data }: { data: WishesPayload | undefined }) {
   if (!data) return <p className="muted center">正在连接看板服务器…</p>;
@@ -16,15 +16,15 @@ export function WishView({ data }: { data: WishesPayload | undefined }) {
       </section>
     );
   }
-  const busy = data.wishes.find((w) => w.status === 'running' || w.status === 'planning');
   const groups = groupWishes(data.wishes);
   return (
     <>
       <WishInput projectName={data.project.name} />
+      {(data.agents.length > 0 || groups.busy.length > 0) && <AgentPanel agents={data.agents} max={data.maxAgents} />}
       {groups.action.length > 0 && (
         <section>
           <h2 className="h-action">需要你处理 · {groups.action.length}</h2>
-          <div className="wishes">{groups.action.map((w) => <WishCard key={w.id} wish={w} busyOther={busy && busy.id !== w.id ? busy : undefined} />)}</div>
+          <div className="wishes">{groups.action.map((w) => <WishCard key={w.id} wish={w} />)}</div>
         </section>
       )}
       {groups.busy.length > 0 && (
@@ -39,18 +39,22 @@ export function WishView({ data }: { data: WishesPayload | undefined }) {
           <div className="wishes">{groups.ended.map((w) => <WishCard key={w.id} wish={w} />)}</div>
         </section>
       )}
-      {data.wishes.length === 0 && (
-        <section className="notice">
-          <h2>怎么用</h2>
-          <ol className="steps">
-            <li>在上面写一句你想做的事，点"许愿"。</li>
-            <li>规划员会读你的项目，把愿望拆成几个小任务，你看一眼，点"开始"。</li>
-            <li>agent 在一个独立分支里干活，这里实时显示它在做什么。你的项目在你点"通过"之前不会被改动。</li>
-            <li>做完后看看改了什么，满意就"通过"（合并），不满意就"打回"（丢弃）。</li>
-          </ol>
-        </section>
-      )}
+      {data.wishes.length === 0 && <Guide />}
     </>
+  );
+}
+
+function Guide() {
+  return (
+    <section className="notice">
+      <h2>怎么用</h2>
+      <ol className="steps">
+        <li>在上面写一句你想做的事，点"许愿"。</li>
+        <li>规划员会读你的项目，把愿望拆成几个小任务，分给调研员和开发者。你看一眼，点"开始"。</li>
+        <li>没有先后关系的任务会同时开工，每个 agent 在自己的独立分支里干活。上面的面板实时显示谁在做什么。</li>
+        <li>做完后看看报告和改动，满意就"通过"（合并到你的项目），不满意就"打回"（丢弃）。点"通过"之前，你的项目不会有任何变化。</li>
+      </ol>
+    </section>
   );
 }
 
@@ -102,6 +106,43 @@ function WishInput({ projectName }: { projectName: string }) {
   );
 }
 
+function AgentPanel({ agents, max }: { agents: RunningAgent[]; max: number }) {
+  const idle = Math.max(0, max - agents.length);
+  return (
+    <section>
+      <h2>
+        谁在干活 · {agents.length} / {max}
+      </h2>
+      <div className="crew">
+        {agents.map((a) => (
+          <article key={`${a.wishId}:${a.taskId}`} className={`crew-card crew-${a.role}`}>
+            <div className="crew-head">
+              <span className={`avatar avatar-${a.role}`} aria-hidden="true">
+                {a.role === 'research' ? '调' : '开'}
+              </span>
+              <strong>{a.name}</strong>
+              <span className="small muted">{timeAgo(a.since)}开工</span>
+            </div>
+            <div className="crew-task">{a.taskTitle}</div>
+            <div className="small muted crew-wish">愿望：{a.wishText}</div>
+            {a.doing && (
+              <p className="working-line small">
+                <span className="spinner" aria-hidden="true" />
+                {a.doing}
+              </p>
+            )}
+          </article>
+        ))}
+        {idle > 0 && (
+          <div className="crew-idle small muted">
+            {agents.length === 0 ? `${max} 个名额都空着，正在等任务。` : `还有 ${idle} 个名额空着，等有能开工的任务就派出去。`}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function useAction(wishId: string) {
   const [pending, setPending] = useState<string>();
   const [error, setError] = useState<string>();
@@ -113,7 +154,7 @@ function useAction(wishId: string) {
   return { pending, error, run };
 }
 
-function WishCard({ wish: w, busyOther }: { wish: Wish; busyOther?: Wish }) {
+function WishCard({ wish: w }: { wish: Wish }) {
   const s = WISH_STATUS[w.status];
   const { pending, error, run } = useAction(w.id);
   const btn = (action: string, label: string, kind = '', body?: unknown) => (
@@ -121,6 +162,8 @@ function WishCard({ wish: w, busyOther }: { wish: Wish; busyOther?: Wish }) {
       {pending === action ? '处理中…' : label}
     </button>
   );
+  const active = w.tasks.filter((t) => t.status === 'running').length;
+  const failedCount = w.tasks.filter((t) => t.status === 'failed').length;
 
   return (
     <article className={`wish tone-${s.tone}`}>
@@ -130,9 +173,18 @@ function WishCard({ wish: w, busyOther }: { wish: Wish; busyOther?: Wish }) {
       </header>
       <div className="wish-meta small muted">
         <span>{timeAgo(w.createdAt)}许愿</span>
-        {w.tasks.length > 0 && <span>任务 {doneCount(w)} / {w.tasks.length}</span>}
+        {w.tasks.length > 0 && (
+          <span>
+            任务 {doneCount(w)} / {w.tasks.length}
+          </span>
+        )}
+        {active > 0 && <span>{active} 个 agent 在干活</span>}
         <span>花费 {money(w.costUsd)}</span>
-        {w.branch && w.status !== 'merged' && w.status !== 'discarded' && <span>分支 <code>{w.branch}</code></span>}
+        {w.branch && w.status !== 'merged' && w.status !== 'discarded' && (
+          <span>
+            分支 <code>{w.branch}</code>
+          </span>
+        )}
       </div>
 
       {w.understanding && w.status !== 'merged' && w.status !== 'discarded' && <p className="understanding">{w.understanding}</p>}
@@ -140,23 +192,25 @@ function WishCard({ wish: w, busyOther }: { wish: Wish; busyOther?: Wish }) {
 
       {w.status === 'planning' && (
         <>
-          <p className="working-line"><span className="spinner" aria-hidden="true" />规划员正在读你的项目、拆任务…</p>
+          <p className="working-line">
+            <span className="spinner" aria-hidden="true" />
+            规划员正在读你的项目、拆任务…
+          </p>
           <div className="actions">{btn('stop', '停止')}</div>
         </>
       )}
 
-      {w.status === 'awaiting_confirm' && <ConfirmTasks wish={w} busyOther={busyOther} run={run} pending={pending} />}
+      {w.status === 'awaiting_confirm' && <ConfirmTasks wish={w} run={run} pending={pending} />}
 
       {(w.status === 'running' || w.status === 'failed' || w.status === 'stopped' || w.status === 'awaiting_review') && <TaskList wish={w} />}
 
-      {w.status === 'running' && <div className="actions">{btn('stop', '停止')}</div>}
+      {w.status === 'running' && <div className="actions">{btn('stop', '全部停止')}</div>}
 
       {(w.status === 'failed' || w.status === 'stopped') && (
         <div className="actions">
-          {btn('retry', '重试', 'primary')}
-          {w.status === 'failed' && btn('skip', '跳过这个任务')}
+          {btn('retry', failedCount > 1 ? '重试没完成的任务' : '重试', 'primary')}
+          {w.status === 'failed' && btn('skip', failedCount > 1 ? '跳过这些任务' : '跳过这个任务')}
           {btn('discard', '打回（丢弃改动）', 'danger')}
-          {busyOther && <span className="small muted">另一个愿望正在进行，等它完成后才能重试。</span>}
         </div>
       )}
 
@@ -179,39 +233,52 @@ function WishCard({ wish: w, busyOther }: { wish: Wish; busyOther?: Wish }) {
   );
 }
 
-const FIELDS: { key: keyof PlannedTask; label: string }[] = [
+const FIELDS: { key: 'goal' | 'deliverable' | 'boundaries' | 'acceptance'; label: string }[] = [
   { key: 'goal', label: '目标' },
   { key: 'deliverable', label: '产出' },
   { key: 'boundaries', label: '不要碰' },
   { key: 'acceptance', label: '怎样算做完' },
 ];
 
-function ConfirmTasks(props: { wish: Wish; busyOther?: Wish; pending?: string; run: (action: string, body?: unknown) => Promise<void> }) {
-  const { wish: w, busyOther, pending, run } = props;
-  const [tasks, setTasks] = useState<PlannedTask[]>(() => w.tasks.map(({ title, goal, deliverable, boundaries, acceptance }) => ({ title, goal, deliverable, boundaries, acceptance })));
+function ConfirmTasks(props: { wish: Wish; pending?: string; run: (action: string, body?: unknown) => Promise<void> }) {
+  const { wish: w, pending, run } = props;
+  const [tasks, setTasks] = useState<PlannedTask[]>(() =>
+    w.tasks.map(({ id, role, dependsOn, title, goal, deliverable, boundaries, acceptance }) => ({ id, role, dependsOn, title, goal, deliverable, boundaries, acceptance })),
+  );
   const update = (i: number, patch: Partial<PlannedTask>) => setTasks((ts) => ts.map((t, j) => (j === i ? { ...t, ...patch } : t)));
+  const remove = (i: number) =>
+    setTasks((ts) => {
+      const gone = ts[i].id;
+      return ts.filter((_, j) => j !== i).map((t) => ({ ...t, dependsOn: t.dependsOn.filter((d) => d !== gone) }));
+    });
+  const numberOf = (id: string) => tasks.findIndex((t) => t.id === id) + 1;
+  const parallel = tasks.filter((t) => t.dependsOn.length === 0).length;
 
   return (
     <>
-      <p className="small muted">规划员拆出了 {tasks.length} 个任务，会按顺序一个个做。可以直接改，或删掉不要的。</p>
+      <p className="small muted">
+        规划员拆出了 {tasks.length} 个任务，{parallel > 1 ? `其中 ${parallel} 个会同时开工，` : ''}其余的等它依赖的任务做完再开始。可以直接改，点角色可以切换。
+      </p>
       <ol className="plan">
         {tasks.map((t, i) => (
-          <li key={i} className="plan-item">
+          <li key={t.id ?? i} className="plan-item">
             <div className="plan-row">
-              <input id={`plan-${w.id}-${i}-title`} aria-label="任务标题" value={t.title} onChange={(e) => update(i, { title: e.target.value })} />
+              <RoleChip role={t.role} onClick={() => update(i, { role: t.role === 'research' ? 'develop' : 'research' })} />
+              <input id={`plan-${w.id}-${t.id}-title`} aria-label="任务标题" value={t.title} onChange={(e) => update(i, { title: e.target.value })} />
               {tasks.length > 1 && (
-                <button type="button" className="link" onClick={() => setTasks((ts) => ts.filter((_, j) => j !== i))}>
+                <button type="button" className="link" onClick={() => remove(i)}>
                   删除
                 </button>
               )}
             </div>
+            <div className="small muted plan-deps">{t.dependsOn.length ? `等 ${t.dependsOn.map((d) => `#${numberOf(d)}`).join('、')} 做完再开始` : '一开始就开工'}</div>
             <details>
               <summary className="small muted">详细要求</summary>
               <div className="plan-fields">
                 {FIELDS.map((f) => (
                   <label key={f.key} className="small">
                     <span className="muted">{f.label}</span>
-                    <textarea id={`plan-${w.id}-${i}-${f.key}`} rows={2} value={t[f.key]} onChange={(e) => update(i, { [f.key]: e.target.value })} />
+                    <textarea id={`plan-${w.id}-${t.id}-${f.key}`} rows={2} value={t[f.key]} onChange={(e) => update(i, { [f.key]: e.target.value })} />
                   </label>
                 ))}
               </div>
@@ -220,38 +287,51 @@ function ConfirmTasks(props: { wish: Wish; busyOther?: Wish; pending?: string; r
         ))}
       </ol>
       <div className="actions">
-        <button type="button" className="primary" disabled={!!pending || !!busyOther} onClick={() => void run('start', { tasks })}>
+        <button type="button" className="primary" disabled={!!pending} onClick={() => void run('start', { tasks })}>
           {pending === 'start' ? '启动中…' : '开始'}
         </button>
         <button type="button" className="danger" disabled={!!pending} onClick={() => void run('discard')}>
           不要了
         </button>
-        {busyOther && <span className="small muted">另一个愿望正在进行，等它完成后才能开始。</span>}
       </div>
     </>
+  );
+}
+
+function RoleChip({ role, onClick }: { role: TaskRole; onClick?: () => void }) {
+  const label = ROLE[role];
+  if (!onClick) return <span className={`role role-${role}`}>{label}</span>;
+  return (
+    <button type="button" className={`role role-${role}`} title="点击切换：调研（只读、可上网、出报告）/ 开发（改代码）" onClick={onClick}>
+      {label}
+    </button>
   );
 }
 
 function TaskList({ wish: w }: { wish: Wish }) {
   return (
     <ol className="tasks">
-      {w.tasks.map((t) => (
-        <TaskRow key={t.id} task={t} />
+      {w.tasks.map((t, i) => (
+        <TaskRow key={t.id} wish={w} task={t} n={i + 1} />
       ))}
     </ol>
   );
 }
 
-function TaskRow({ task: t }: { task: WishTask }) {
+function TaskRow({ wish: w, task: t, n }: { wish: Wish; task: WishTask; n: number }) {
   const live = t.status === 'running';
   const last = t.activity[t.activity.length - 1];
+  const waiting = t.status === 'todo' ? waitingFor(w, t) : '';
   return (
     <li className={`task task-${t.status}`}>
       <div className="task-head">
         <span className={`dot dot-${t.status}`} aria-hidden="true" />
+        <span className="muted small">#{n}</span>
+        <RoleChip role={t.role} />
         <span className="task-title">{t.title}</span>
-        <span className="small muted">{TASK_STATUS[t.status]}</span>
+        <span className="small muted task-state">{live && t.agent ? `${t.agent} 正在做` : TASK_STATUS[t.status]}</span>
       </div>
+      {waiting && <p className="small muted task-note">{waiting}</p>}
       {live && last && (
         <p className="working-line small">
           <span className="spinner" aria-hidden="true" />
@@ -259,7 +339,14 @@ function TaskRow({ task: t }: { task: WishTask }) {
         </p>
       )}
       {t.status === 'failed' && t.error && <p className="small error-text">{t.error}</p>}
-      {t.denials > 0 && <p className="small muted">有 {t.denials} 个操作被安全规则拦下了。</p>}
+      {t.attempts > 1 && t.status !== 'failed' && <p className="small muted task-note">和同事的改动冲突过，已基于最新代码重做。</p>}
+      {t.denials > 0 && <p className="small muted task-note">有 {t.denials} 个操作被安全规则拦下了。</p>}
+      {t.status === 'done' && t.role === 'research' && t.resultText && (
+        <details className="report">
+          <summary className="small">看调研报告</summary>
+          <div className="report-body">{t.resultText}</div>
+        </details>
+      )}
       {t.activity.length > 0 && <ActivityLog task={t} open={live} />}
     </li>
   );
@@ -286,21 +373,28 @@ function ActivityLog({ task: t, open }: { task: WishTask; open: boolean }) {
 }
 
 function Review({ wish: w }: { wish: Wish }) {
-  const summaries = w.tasks.filter((t) => t.resultText);
+  const finished = w.tasks.filter((t) => t.status === 'done' || t.status === 'skipped');
   return (
     <div className="review">
-      {summaries.length > 0 && (
-        <>
-          <h3>agent 说它做了这些</h3>
-          {summaries.map((t) => (
-            <div key={t.id} className="result">
-              <div className="small muted">{t.title}</div>
-              <p>{t.resultText}</p>
-            </div>
-          ))}
-        </>
-      )}
-      <h3>改动了哪些文件</h3>
+      <h3>每个任务做了什么</h3>
+      {finished.map((t) => (
+        <div key={t.id} className={`result result-${t.status === 'skipped' ? 'skipped' : t.role}`}>
+          <div className="small muted">
+            <RoleChip role={t.role} /> {t.title}
+            {t.status === 'skipped' && '（已跳过）'}
+          </div>
+          {t.role === 'research' && t.resultText ? (
+            <details>
+              <summary className="small">看调研报告</summary>
+              <div className="report-body">{t.resultText}</div>
+            </details>
+          ) : (
+            t.resultText && <p>{t.resultText}</p>
+          )}
+          {t.diffStat && <pre className="stat-block small">{t.diffStat}</pre>}
+        </div>
+      ))}
+      <h3>合起来改动了哪些文件</h3>
       {w.diffStat ? <pre className="stat-block">{w.diffStat}</pre> : <p className="muted small">没有改动任何文件。</p>}
       {w.diff && (
         <details className="diff">

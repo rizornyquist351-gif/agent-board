@@ -1,5 +1,5 @@
 // 许愿界面用到的文字和分组规则（纯函数，方便测试）。
-import type { TaskStatus, Wish, WishStatus } from '../src/shared/wish.ts';
+import type { TaskRole, TaskStatus, Wish, WishStatus, WishTask } from '../src/shared/wish.ts';
 
 export const WISH_STATUS: Record<WishStatus, { label: string; tone: 'busy' | 'action' | 'done' | 'muted' | 'bad' }> = {
   planning: { label: '正在拆任务', tone: 'busy' },
@@ -13,8 +13,13 @@ export const WISH_STATUS: Record<WishStatus, { label: string; tone: 'busy' | 'ac
   discarded: { label: '已打回', tone: 'muted' },
 };
 
+export const ROLE: Record<TaskRole, string> = {
+  research: '调研',
+  develop: '开发',
+};
+
 export const TASK_STATUS: Record<TaskStatus, string> = {
-  todo: '排队中',
+  todo: '等待开工',
   running: '进行中',
   done: '完成',
   failed: '没完成',
@@ -51,4 +56,16 @@ export function money(usd: number): string {
 
 export function doneCount(w: Wish): number {
   return w.tasks.filter((t) => t.status === 'done' || t.status === 'skipped').length;
+}
+
+/** 还没开工的任务在等什么，给用户看的一句话 */
+export function waitingFor(w: Wish, t: WishTask): string {
+  const pending = t.dependsOn
+    .map((id) => w.tasks.findIndex((x) => x.id === id))
+    .filter((i) => i >= 0 && w.tasks[i].status !== 'done' && w.tasks[i].status !== 'skipped');
+  if (pending.length) {
+    const failed = pending.some((i) => w.tasks[i].status === 'failed');
+    return `${failed ? '依赖的任务没完成：' : '等 '}${pending.map((i) => `#${i + 1}`).join('、')}${failed ? '' : ' 做完'}`;
+  }
+  return w.status === 'running' ? '等空出名额' : '';
 }

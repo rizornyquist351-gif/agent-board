@@ -45,9 +45,24 @@ describe('resultFromEvent', () => {
 });
 
 describe('parsePlan', () => {
-  it('接受合格的规划', () => {
-    const p = parsePlan({ understanding: '理解', tasks: [{ title: ' 加 LICENSE ', goal: 'g', deliverable: 'd', boundaries: 'b', acceptance: 'a' }] });
-    expect(p).toEqual({ understanding: '理解', tasks: [{ title: '加 LICENSE', goal: 'g', deliverable: 'd', boundaries: 'b', acceptance: 'a' }] });
+  it('接受合格的规划，换算依赖', () => {
+    const p = parsePlan({
+      understanding: '理解',
+      tasks: [
+        { role: 'research', dependsOn: [], title: ' 查资料 ', goal: 'g', deliverable: 'd', boundaries: 'b', acceptance: 'a' },
+        { role: 'develop', dependsOn: [1, 1, 2, 5], title: '写代码', goal: 'g', deliverable: 'd', boundaries: 'b', acceptance: 'a' },
+      ],
+    })!;
+    expect(p.understanding).toBe('理解');
+    expect(p.tasks.map((t) => [t.id, t.role, t.title, t.dependsOn])).toEqual([
+      ['1', 'research', '查资料', []],
+      ['2', 'develop', '写代码', ['1']],
+    ]);
+  });
+  it('跳过没标题的任务时，依赖序号照样对得上', () => {
+    const p = parsePlan({ tasks: [{ goal: '无标题' }, { title: 'A', dependsOn: [] }, { title: 'B', dependsOn: [1, 2] }] })!;
+    expect(p.tasks.map((t) => [t.id, t.dependsOn])).toEqual([['1', []], ['2', ['1']]]);
+    expect(p.tasks[0].role).toBe('develop');
   });
   it('拒绝空的或坏的规划', () => {
     expect(parsePlan(undefined)).toBeUndefined();
@@ -57,11 +72,20 @@ describe('parsePlan', () => {
 });
 
 describe('workPrompt', () => {
-  it('包含任务、前序结果和规则', () => {
-    const p = workPrompt('加暗色模式', { title: '改样式', goal: 'g', deliverable: 'd', boundaries: 'b', acceptance: 'a' }, 1, 2, [{ title: '调研', result: '用 CSS 变量' }]);
-    expect(p).toContain('第 2 个');
-    expect(p).toContain('## 本任务：改样式');
-    expect(p).toContain('调研：用 CSS 变量');
+  const task = { title: '改样式', goal: 'g', deliverable: 'd', boundaries: 'b', acceptance: 'a', dependsOn: [] };
+  it('开发者：包含任务、调研报告原文和规则', () => {
+    const p = workPrompt('加暗色模式', { ...task, role: 'develop' }, 3, [{ title: '调研', role: 'research', result: '## 结论\n用 CSS 变量' }]);
+    expect(p).toContain('你是 agent-board 派来的开发者');
+    expect(p).toContain('## 你的任务：改样式');
+    expect(p).toContain('### 调研报告：调研\n## 结论\n用 CSS 变量');
     expect(p).toContain('不要执行 git commit');
+  });
+  it('调研员：只读规则', () => {
+    const p = workPrompt('加暗色模式', { ...task, role: 'research' }, 1, []);
+    expect(p).toContain('调研员');
+    expect(p).toContain('不要修改任何文件');
+  });
+  it('冲突重做时带上提示', () => {
+    expect(workPrompt('x', { ...task, role: 'develop' }, 1, [], '冲突了')).toContain('## 注意\n冲突了');
   });
 });

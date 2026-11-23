@@ -146,7 +146,7 @@ pre { background: var(--bg); padding: 8px; border-radius: 6px; overflow: auto; m
 
 /* ---------- 按钮、通用 ---------- */
 button { font: inherit; }
-.actions button, .wish-input button, .plan-row button {
+.actions button, .wish-input button {
   border: 1px solid var(--border); background: var(--panel); color: var(--text);
   padding: 6px 14px; border-radius: 8px; cursor: pointer;
 }
@@ -218,6 +218,7 @@ textarea, input {
 .plan { padding-left: 22px; margin: 8px 0 0; display: grid; gap: 10px; }
 .plan-row { display: flex; gap: 8px; align-items: center; }
 .plan-row button { flex: none; white-space: nowrap; }
+.plan-row .role { padding: 4px 9px; font-size: 12px; }
 .plan-row input { font-weight: 500; }
 .plan details { margin-top: 4px; }
 .plan-fields { display: grid; gap: 8px; margin-top: 6px; }
@@ -250,6 +251,55 @@ textarea, input {
 .diff .add { color: var(--ok); }
 .diff .del { color: var(--bad); }
 .diff .hunk { color: var(--accent); }
+
+/* ---------- 第 2 阶段：角色、Agent 面板、报告 ---------- */
+:root { --research: #7a4fc9; --research-soft: #efe8fb; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --research: #b79af0; --research-soft: #2a1f40; } }
+:root[data-theme="dark"] { --research: #b79af0; --research-soft: #2a1f40; }
+
+.role {
+  font: inherit; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 4px; flex: none;
+  border: 1px solid transparent; white-space: nowrap;
+}
+.role-research { background: var(--research-soft); color: var(--research); }
+.role-develop { background: var(--accent-soft); color: var(--accent); }
+button.role { cursor: pointer; }
+button.role:hover { border-color: currentColor; }
+.plan-deps { margin: 2px 0 0 2px; }
+.task-state { white-space: nowrap; }
+.task-note { margin: 4px 0 0; }
+
+.crew { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+.crew-card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px;
+  box-shadow: var(--shadow); min-width: 0; border-top: 3px solid var(--accent);
+}
+.crew-card.crew-research { border-top-color: var(--research); }
+.crew-head { display: flex; gap: 8px; align-items: center; }
+.crew-head .muted { margin-left: auto; white-space: nowrap; }
+.avatar {
+  width: 22px; height: 22px; border-radius: 50%; display: inline-grid; place-items: center;
+  font-size: 11px; font-weight: 700; flex: none;
+}
+.avatar-research { background: var(--research-soft); color: var(--research); }
+.avatar-develop { background: var(--accent-soft); color: var(--accent); }
+.crew-task { margin-top: 6px; font-weight: 500; overflow-wrap: anywhere; }
+.crew-wish { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crew-idle {
+  border: 1px dashed var(--border); border-radius: 10px; padding: 10px 12px;
+  display: flex; align-items: center; min-height: 64px;
+}
+
+.report summary { cursor: pointer; color: var(--research); margin-top: 6px; }
+.report-body {
+  white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; margin-top: 6px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+  max-height: 360px; overflow: auto;
+}
+.result-research { border-left-color: var(--research); }
+.result-skipped { border-left-color: var(--muted); }
+.result .stat-block { margin-top: 6px; }
+.result details summary { cursor: pointer; color: var(--research); }
 
 @media (max-width: 720px) {
   .summary { grid-template-columns: 1fr 1fr; }

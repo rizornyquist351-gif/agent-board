@@ -4,14 +4,17 @@ export type WishStatus =
   | 'planning' // 规划 agent 正在拆任务
   | 'plan_failed' // 拆任务失败
   | 'awaiting_confirm' // 等用户确认任务清单
-  | 'running' // agent 正在按顺序干活
-  | 'failed' // 某个任务失败，等用户决定重试 / 跳过
+  | 'running' // agent 正在干活（可能多个并行）
+  | 'failed' // 有任务失败、其余能做的都做完了，等用户决定重试 / 跳过
   | 'stopped' // 用户手动停止
   | 'awaiting_review' // 全部完成，等用户 通过 / 打回
   | 'merged' // 已通过并合并
   | 'discarded'; // 已打回，改动已丢弃
 
 export type TaskStatus = 'todo' | 'running' | 'done' | 'failed' | 'skipped';
+
+/** research：调研员，只读 + 可上网，产出报告；develop：开发者，改代码（D16） */
+export type TaskRole = 'research' | 'develop';
 
 export interface Activity {
   at: number;
@@ -22,6 +25,17 @@ export interface Activity {
 
 export interface WishTask {
   id: string;
+  role: TaskRole;
+  /** resolve：验收合并时和项目最新代码冲突，自动追加的"解决冲突"任务 */
+  kind?: 'resolve';
+  /** 依赖的任务 id；这些任务完成（或跳过）后才开始 */
+  dependsOn: string[];
+  /** 正在干活的 agent 的名字，如"开发者 2" */
+  agent?: string;
+  /** 第几次尝试（合并冲突时会自动重做） */
+  attempts: number;
+  /** 开发任务合并进愿望分支时的改动摘要 */
+  diffStat?: string;
   title: string;
   goal: string;
   deliverable: string;
@@ -30,7 +44,7 @@ export interface WishTask {
   status: TaskStatus;
   /** 最近的活动，最新在最后 */
   activity: Activity[];
-  /** agent 最后的总结 */
+  /** agent 最后的总结；调研任务就是调研报告 */
   resultText?: string;
   error?: string;
   costUsd: number;
@@ -69,4 +83,20 @@ export interface ProjectInfo {
 }
 
 /** 规划结果中单个任务的字段（用户确认前可以修改） */
-export type PlannedTask = Pick<WishTask, 'title' | 'goal' | 'deliverable' | 'boundaries' | 'acceptance'>;
+export type PlannedTask = Pick<WishTask, 'title' | 'goal' | 'deliverable' | 'boundaries' | 'acceptance' | 'role' | 'dependsOn'> & {
+  /** 修改后的清单里保留原来的 id，依赖关系才对得上 */
+  id?: string;
+};
+
+/** 正在干活的 agent（Agent 面板用） */
+export interface RunningAgent {
+  name: string;
+  role: TaskRole;
+  wishId: string;
+  wishText: string;
+  taskId: string;
+  taskTitle: string;
+  /** 最近一条活动 */
+  doing?: string;
+  since: number;
+}

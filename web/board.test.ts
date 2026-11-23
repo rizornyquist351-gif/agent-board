@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { Task } from '../src/shared/types.ts';
 import { columnOf, groupByColumn, shortId, timeAgo } from './board.ts';
+import { waitingFor } from './wishText.ts';
+import type { Wish, WishTask } from '../src/shared/wish.ts';
 
 function task(p: Partial<Task>): Task {
   return { id: '1', listId: 'l', subject: 's', description: '', status: 'pending', blocks: [], blockedBy: [], blocked: false, metadata: {}, updatedAt: 0, ...p };
@@ -39,5 +41,21 @@ describe('timeAgo', () => {
     expect(timeAgo(0, 30_000)).toBe('刚刚');
     expect(timeAgo(0, 5 * 60_000)).toBe('5 分钟前');
     expect(timeAgo(0, 3 * 3600_000)).toBe('3 小时前');
+  });
+});
+
+describe('waitingFor', () => {
+  const t = (id: string, status: WishTask['status'], dependsOn: string[] = []) => ({ id, status, dependsOn }) as WishTask;
+  it('说明在等哪个任务', () => {
+    const w = { status: 'running', tasks: [t('1', 'running'), t('2', 'done'), t('3', 'todo', ['1', '2'])] } as Wish;
+    expect(waitingFor(w, w.tasks[2])).toBe('等 #1 做完');
+  });
+  it('依赖失败', () => {
+    const w = { status: 'failed', tasks: [t('1', 'failed'), t('2', 'todo', ['1'])] } as Wish;
+    expect(waitingFor(w, w.tasks[1])).toBe('依赖的任务没完成：#1');
+  });
+  it('依赖都好了，在等名额', () => {
+    const w = { status: 'running', tasks: [t('1', 'done'), t('2', 'todo', ['1'])] } as Wish;
+    expect(waitingFor(w, w.tasks[1])).toBe('等空出名额');
   });
 });

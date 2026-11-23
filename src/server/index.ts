@@ -17,6 +17,7 @@
 //   AGENT_BOARD_MODEL         指定模型
 //   AGENT_BOARD_PLAN_BUDGET   规划费用上限（美元），默认 0.5
 //   AGENT_BOARD_TASK_BUDGET   每个任务费用上限（美元），默认 2
+//   AGENT_BOARD_MAX_AGENTS    同时最多几个 agent 干活，默认 3
 //
 // 安全（D13）：只监听 127.0.0.1；拒绝 Host 不是本机、或 Origin 来自其他网站的请求；
 // 写操作必须是 JSON 请求。这样别的网站无法替用户"许愿"。
@@ -87,7 +88,7 @@ if (!project.problem) {
     project.path,
     runner,
     { planUsd: Number(process.env.AGENT_BOARD_PLAN_BUDGET ?? 0.5), taskUsd: Number(process.env.AGENT_BOARD_TASK_BUDGET ?? 2) },
-    worktreeRoot,
+    { worktreeRoot, maxAgents: Math.max(1, Number(process.env.AGENT_BOARD_MAX_AGENTS ?? 3)) },
   );
   await manager.load();
   // 活动更新很频繁，合并成每 200ms 最多推送一次
@@ -102,7 +103,7 @@ if (!project.problem) {
 
 async function wishesPayload() {
   if (manager) project = await projectInfo(project.path); // 分支可能变了
-  return { project, fake: FAKE, wishes: manager?.list() ?? [] };
+  return { project, fake: FAKE, wishes: manager?.list() ?? [], agents: manager?.agents() ?? [], maxAgents: manager?.maxAgents ?? 0 };
 }
 
 async function pushWishes() {

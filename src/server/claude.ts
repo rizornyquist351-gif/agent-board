@@ -5,7 +5,7 @@
 
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import type { Activity, PlannedTask } from '../shared/wish.ts';
+import type { Activity, PlannedTask, TaskRole } from '../shared/wish.ts';
 
 export interface RunResult {
   ok: boolean;
@@ -24,8 +24,8 @@ export interface RunHandle {
 export interface Runner {
   /** 规划：只读工具 + JSON schema，返回结构化结果 */
   plan(opts: { cwd: string; prompt: string; schema: object; budgetUsd: number }): RunHandle;
-  /** 执行：可以改文件、跑命令，过程中不断回调活动 */
-  work(opts: { cwd: string; prompt: string; budgetUsd: number; onActivity: (a: Activity) => void }): RunHandle;
+  /** 执行：develop 可以改文件、跑命令；research 只读 + 可上网。过程中不断回调活动 */
+  work(opts: { cwd: string; prompt: string; role: TaskRole; budgetUsd: number; onActivity: (a: Activity) => void }): RunHandle;
 }
 
 // ---------- 把工具调用翻译成大白话 ----------
@@ -34,6 +34,11 @@ function shortPath(p: unknown): string {
   if (typeof p !== 'string') return '';
   const parts = p.split(/[\\/]/).filter(Boolean);
   return parts.slice(-2).join('/');
+}
+
+/** 截断但保留换行（用于报告） */
+function truncate(s: string, n: number): string {
+  return s.length > n ? `${s.slice(0, n)}\n…（后面省略）` : s;
 }
 
 function clip(s: string, n = 80): string {
@@ -119,6 +124,8 @@ export function resultFromEvent(ev: Record<string, any>): RunResult {
 
 // ---------- 真实实现：调用 claude 命令行 ----------
 
+const RESEARCH_TOOLS = 'Read,Glob,Grep,WebSearch,WebFetch';
+
 export interface CliOptions {
   /** claude 可执行文件，默认 "claude" */
   bin?: string;
@@ -174,8 +181,10 @@ export function createCliRunner(opts: CliOptions = {}): Runner {
         '--tools', 'Read,Glob,Grep', '--max-budget-usd', String(budgetUsd), ...model];
       return runCli(bin, args, cwd, () => {});
     },
-    work({ cwd, prompt, budgetUsd, onActivity }) {
-      const args = ['-p', prompt, '--output-format', 'stream-json', '--verbose',
+    work({ cwd, prompt, role, budgetUsd, onActivity }) {
+      // 调研员只给只读工具和上网工具，并预先允许上网（D16）
+      const tools = role === 'research' ? ['--tools', RESEARCH_TOOLS, '--allowedTools', 'WebSearch', 'WebFetch'] : [];
+      const args = ['-p', prompt, '--output-format', 'stream-json', '--verbose', ...tools,
         '--permission-mode', opts.permissionMode ?? 'auto', '--max-budget-usd', String(budgetUsd), ...model];
       return runCli(bin, args, cwd, (ev) => activitiesFromEvent(ev).forEach(onActivity));
     },
@@ -191,17 +200,19 @@ export const PLAN_SCHEMA = {
     tasks: {
       type: 'array',
       minItems: 1,
-      maxItems: 6,
+      maxItems: 8,
       items: {
         type: 'object',
         properties: {
+          role: { type: 'string', enum: ['research', 'develop'], description: 'research=只调研出报告，不改文件；develop=改代码' },
+          dependsOn: { type: 'array', items: { type: 'integer' }, description: '必须先完成的任务序号（从 1 开始，只能是排在前面的任务）' },
           title: { type: 'string', description: '简短标题，动词开头' },
           goal: { type: 'string', description: '要达成什么' },
           deliverable: { type: 'string', description: '产出是什么：改哪些文件 / 写什么报告' },
           boundaries: { type: 'string', description: '不要碰什么、不做什么' },
           acceptance: { type: 'string', description: '怎样算做完，最好能检验' },
         },
-        required: ['title', 'goal', 'deliverable', 'boundaries', 'acceptance'],
+        required: ['role', 'dependsOn', 'title', 'goal', 'deliverable', 'boundaries', 'acceptance'],
       },
     },
   },
@@ -210,9 +221,12 @@ export const PLAN_SCHEMA = {
 
 export function planPrompt(wish: string): string {
   return [
-    '你是 agent-board 的规划员。用户用一句话许了一个愿，请先阅读当前项目了解情况，再把愿望拆成 1 到 6 个按顺序执行的小任务。',
+    '你是 agent-board 的规划员。用户用一句话许了一个愿，请先阅读当前项目了解情况，再把愿望拆成 1 到 8 个小任务，交给多个 agent 同时去做。',
     '要求：',
     '- 每个任务一个人一次能做完；能少拆就少拆，简单的愿望一个任务就够。',
+    '- 每个任务选一个角色：research（调研员：只读代码、可以上网查资料，产出一份报告，不改文件）或 develop（开发者：改代码）。只有确实需要先查资料或先摸清情况时才安排调研。',
+    '- 用 dependsOn 写清依赖：必须等哪些任务做完才能开始（填排在前面的任务序号，从 1 开始）。没有依赖的任务会同时开工。',
+    '- 会改到同一批文件的开发任务不能同时做，必须用 dependsOn 排成先后。',
     '- 每个任务写清：目标、产出、边界（不要碰什么）、验收标准。',
     '- 全部用中文，用普通人看得懂的话。',
     '- 你只负责规划，不要修改任何文件。',
@@ -230,40 +244,91 @@ export function parsePlan(structured: unknown): { understanding: string; tasks: 
   if (typeof structured !== 'object' || structured === null) return undefined;
   const s = structured as Record<string, unknown>;
   if (!Array.isArray(s.tasks)) return undefined;
-  const tasks = s.tasks.flatMap((t): PlannedTask[] => {
-    if (typeof t !== 'object' || t === null) return [];
-    const r = t as Record<string, unknown>;
-    const title = asText(r.title);
-    return title
-      ? [{ title, goal: asText(r.goal), deliverable: asText(r.deliverable), boundaries: asText(r.boundaries), acceptance: asText(r.acceptance) }]
-      : [];
+  // 依赖用的是规划里的序号（从 1 开始），先记下每个序号对应的新 id，再换算
+  const kept: { n: number; r: Record<string, unknown> }[] = [];
+  s.tasks.forEach((t, i) => {
+    if (typeof t === 'object' && t !== null && asText((t as Record<string, unknown>).title)) kept.push({ n: i + 1, r: t as Record<string, unknown> });
+  });
+  const idOf = new Map(kept.map((k, i) => [k.n, String(i + 1)]));
+  const tasks = kept.map(({ n, r }, i): PlannedTask => {
+    const deps = Array.isArray(r.dependsOn) ? r.dependsOn : [];
+    const dependsOn = [...new Set(deps.filter((d): d is number => Number.isInteger(d) && d < n && idOf.has(d)).map((d) => idOf.get(d)!))];
+    return {
+      id: String(i + 1),
+      role: r.role === 'research' ? 'research' : 'develop',
+      dependsOn,
+      title: asText(r.title),
+      goal: asText(r.goal),
+      deliverable: asText(r.deliverable),
+      boundaries: asText(r.boundaries),
+      acceptance: asText(r.acceptance),
+    };
   });
   return tasks.length ? { understanding: asText(s.understanding), tasks } : undefined;
 }
 
-export function workPrompt(wish: string, task: PlannedTask, index: number, total: number, previous: { title: string; result?: string }[]): string {
-  const lines = [
-    `你是 agent-board 派来干活的开发者。用户许了一个愿，规划员把它拆成了 ${total} 个任务，你现在做第 ${index + 1} 个。`,
+export function resolvePrompt(wish: string, branch: string, files: string[]): string {
+  return [
+    '你是 agent-board 派来的开发者。用户许的愿已经做完，但在合并进用户项目时，和项目里别的新改动（可能是另一个愿望刚合并的）冲突了。',
     '',
     `用户的愿望：${wish}`,
     '',
-    `## 本任务：${task.title}`,
+    `当前目录正在把项目最新的代码（分支 ${branch}）合并进这次许愿的改动，以下文件有冲突，里面有 <<<<<<< ======= >>>>>>> 冲突标记：`,
+    '',
+    '## 冲突文件',
+    ...files.map((f) => `- ${f}`),
+    '',
+    '## 规则',
+    '- 逐个解决冲突：两边的改动通常都要保留，合理地合在一起；删掉所有冲突标记。',
+    '- 只处理冲突，不要做别的改动。',
+    '- 不要执行 git commit、git merge --abort、切换分支——看板会自动提交。',
+    '- 做完后用几句中文说明每个文件是怎么合的。',
+  ].join('\n');
+}
+
+export interface PriorResult {
+  title: string;
+  role: TaskRole;
+  result?: string;
+}
+
+export function workPrompt(wish: string, task: PlannedTask, total: number, previous: PriorResult[], note?: string): string {
+  const research = task.role === 'research';
+  const lines = [
+    research
+      ? `你是 agent-board 派来的调研员。用户许了一个愿，规划员把它拆成了 ${total} 个任务，分给几位同事同时做，你负责其中一个调研任务。`
+      : `你是 agent-board 派来的开发者。用户许了一个愿，规划员把它拆成了 ${total} 个任务，分给几位同事同时做，你负责其中一个开发任务。`,
+    '',
+    `用户的愿望：${wish}`,
+    '',
+    `## 你的任务：${task.title}`,
     `- 目标：${task.goal}`,
     `- 产出：${task.deliverable}`,
     `- 边界：${task.boundaries}`,
     `- 验收标准：${task.acceptance}`,
   ];
   if (previous.length) {
-    lines.push('', '## 之前已完成的任务');
-    for (const p of previous) lines.push(`- ${p.title}${p.result ? `：${clip(p.result, 300)}` : ''}`);
+    lines.push('', '## 你依赖的任务已经完成，结果如下');
+    for (const p of previous) {
+      if (p.role === 'research') lines.push(`### 调研报告：${p.title}`, truncate(p.result ?? '（没有报告）', 4000), '');
+      else lines.push(`- 开发：${p.title}${p.result ? `：${clip(p.result, 300)}` : ''}`);
+    }
   }
-  lines.push(
-    '',
-    '## 规则',
-    '- 当前目录是专门为这次许愿建的独立 git 工作区，放心修改。',
-    '- 不要执行 git commit、git push、切换或新建分支——看板会自动提交，用户审核后才会合并。',
-    '- 只做本任务，不要提前做后面的任务。',
-    '- 做完后用几句中文总结：做了什么、怎么验证的、有什么需要用户注意。',
-  );
+  if (note) lines.push('', `## 注意`, note);
+  lines.push('', '## 规则');
+  if (research) {
+    lines.push(
+      '- 你只能读代码、上网查资料，不要修改任何文件。',
+      '- 只做本任务。',
+      '- 最后直接输出调研报告（中文、Markdown）：结论放最前面，然后是依据和建议，引用网上资料时附上链接。这份报告会交给后续的开发者。',
+    );
+  } else {
+    lines.push(
+      '- 当前目录是专门给你建的独立 git 工作区，放心修改。其他同事在别的工作区里同时干活。',
+      '- 不要执行 git commit、git push、切换或新建分支——看板会自动提交并合并，用户审核后才会进入正式项目。',
+      '- 只做本任务，不要顺手改不相关的文件，免得和同事的改动冲突。',
+      '- 做完后用几句中文总结：做了什么、怎么验证的、有什么需要用户注意。',
+    );
+  }
   return lines.join('\n');
 }
