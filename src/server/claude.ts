@@ -9,6 +9,9 @@ import type { Activity, PlannedTask, TaskRole } from '../shared/wish.ts';
 
 export interface RunResult {
   ok: boolean;
+  /** 进程退出时没有给出结果事件（启动失败、参数不被接受等） */
+  noResult?: boolean;
+  stderr?: string;
   /** agent 最后的文字总结，或出错原因 */
   text: string;
   costUsd: number;
@@ -24,6 +27,8 @@ export interface RunHandle {
 export interface Runner {
   /** 规划：只读工具 + JSON schema，返回结构化结果 */
   plan(opts: { cwd: string; prompt: string; schema: object; budgetUsd: number }): RunHandle;
+  /** 执行 agent 当前使用的权限模式 */
+  permissionMode?(): string;
   /** 执行：develop 可以改文件、跑命令；research 只读 + 可上网。过程中不断回调活动 */
   work(opts: { cwd: string; prompt: string; role: TaskRole; budgetUsd: number; onActivity: (a: Activity) => void }): RunHandle;
 }
@@ -163,7 +168,7 @@ function runCli(bin: string, args: string[], cwd: string, onEvent: (e: Record<st
       rl.close();
       if (stopped) resolve({ ok: false, text: '已被手动停止', costUsd: result?.costUsd ?? 0, denials: result?.denials ?? 0 });
       else if (result) resolve(result);
-      else resolve({ ok: false, text: `Claude Code 意外退出（退出码 ${code}）${stderr ? `：${clip(stderr, 300)}` : ''}`, costUsd: 0, denials: 0 });
+      else resolve({ ok: false, noResult: true, stderr, text: `Claude Code 意外退出（退出码 ${code}）${stderr ? `：${clip(stderr, 300)}` : ''}`, costUsd: 0, denials: 0 });
     });
   });
   return {
@@ -178,7 +183,9 @@ function runCli(bin: string, args: string[], cwd: string, onEvent: (e: Record<st
 export function createCliRunner(opts: CliOptions = {}): Runner {
   const bin = opts.bin ?? 'claude';
   const model = opts.model ? ['--model', opts.model] : [];
+  let mode = opts.permissionMode ?? 'auto';
   return {
+    permissionMode: () => mode,
     plan({ cwd, prompt, schema, budgetUsd }) {
       // 只给只读工具：既保证不改文件，也避免大量探索导致超预算（RESEARCH.md 第六节）
       const args = ['-p', prompt, '--output-format', 'stream-json', '--verbose', '--json-schema', JSON.stringify(schema),
@@ -188,9 +195,29 @@ export function createCliRunner(opts: CliOptions = {}): Runner {
     work({ cwd, prompt, role, budgetUsd, onActivity }) {
       // 调研员只给只读工具和上网工具，并预先允许上网（D16）
       const tools = role === 'research' ? ['--tools', RESEARCH_TOOLS, '--allowedTools', 'WebSearch', 'WebFetch'] : [];
-      const args = ['-p', prompt, '--output-format', 'stream-json', '--verbose', ...tools,
-        '--permission-mode', opts.permissionMode ?? 'auto', '--max-budget-usd', String(budgetUsd), ...model];
-      return runCli(bin, args, cwd, (ev) => activitiesFromEvent(ev, Date.now(), cwd).forEach(onActivity));
+      const start = () =>
+        runCli(bin, ['-p', prompt, '--output-format', 'stream-json', '--verbose', ...tools, '--permission-mode', mode, '--max-budget-usd', String(budgetUsd), ...model], cwd, (ev) =>
+          activitiesFromEvent(ev, Date.now(), cwd).forEach(onActivity),
+        );
+      let current = start();
+      let stopped = false;
+      const done = current.done.then((r) => {
+        // auto 模式不可用（账号或版本不支持）：本次及以后都改用 acceptEdits（只自动允许改文件）
+        if (!stopped && !r.ok && r.noResult && mode === 'auto' && /permission|auto/i.test(r.stderr ?? '')) {
+          mode = 'acceptEdits';
+          onActivity({ at: Date.now(), kind: 'info', text: '你的 Claude Code 不支持自动权限模式，已改用"自动允许改文件"模式重新开始' });
+          current = start();
+          return current.done;
+        }
+        return r;
+      });
+      return {
+        done,
+        stop() {
+          stopped = true;
+          current.stop();
+        },
+      };
     },
   };
 }

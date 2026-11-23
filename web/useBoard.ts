@@ -1,16 +1,10 @@
 import { useEffect, useState } from 'react';
 import type { BoardState } from '../src/shared/types.ts';
-import type { ProjectInfo, RunningAgent, Wish } from '../src/shared/wish.ts';
+import type { WishesPayload } from '../src/shared/wish.ts';
 
 export type Connection = 'connecting' | 'live' | 'reconnecting';
 
-export interface WishesPayload {
-  project: ProjectInfo;
-  fake: boolean;
-  wishes: Wish[];
-  agents: RunningAgent[];
-  maxAgents: number;
-}
+export type { WishesPayload } from '../src/shared/wish.ts';
 
 /** 通过 SSE 订阅看板数据；断线后浏览器会自动重连（D10）。 */
 export function useBoard(): { state: BoardState | undefined; wishes: WishesPayload | undefined; connection: Connection } {

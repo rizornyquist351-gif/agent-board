@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PlannedTask, RunningAgent, TaskRole, Wish, WishTask } from '../src/shared/wish.ts';
 import { timeAgo } from './board.ts';
+import { ProjectSwitcher } from './Setup.tsx';
 import { post, type WishesPayload } from './useBoard.ts';
 import { ROLE, TASK_STATUS, WISH_STATUS, doneCount, groupWishes, money, waitingFor } from './wishText.ts';
 
@@ -12,7 +13,9 @@ export function WishView({ data }: { data: WishesPayload | undefined }) {
       <section className="notice notice-bad">
         <h2>这个项目暂时不能许愿</h2>
         <p>{data.project.problem}</p>
-        <p className="muted small">项目目录：{data.project.path}</p>
+        {data.project.path && <p className="muted small">项目目录：{data.project.path}</p>}
+        <h3 className="small">换一个项目</h3>
+        <ProjectSwitcher current={data.project.path} recent={data.recent} />
       </section>
     );
   }

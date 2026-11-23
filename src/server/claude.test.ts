@@ -92,3 +92,24 @@ describe('workPrompt', () => {
     expect(workPrompt('x', { ...task, role: 'develop' }, 1, [], '冲突了')).toContain('## 注意\n冲突了');
   });
 });
+
+describe('createCliRunner（用假 claude 脚本）', () => {
+  it('auto 权限模式不可用时自动降级为 acceptEdits 并重跑', async () => {
+    const { createCliRunner } = await import('./claude.ts');
+    const { fileURLToPath } = await import('node:url');
+    const bin = fileURLToPath(new URL('../../test-fixtures/fake-claude.sh', import.meta.url));
+    const runner = createCliRunner({ bin });
+    const acts: string[] = [];
+    const r = await runner.work({ cwd: process.cwd(), prompt: 'x', role: 'develop', budgetUsd: 1, onActivity: (a) => acts.push(a.text) }).done;
+    expect(r).toMatchObject({ ok: true, text: '好了', costUsd: 0.001 });
+    expect(runner.permissionMode!()).toBe('acceptEdits');
+    expect(acts[0]).toContain('不支持自动权限模式');
+    expect(acts[1]).toBe('正在看 README.md');
+  });
+  it('找不到 claude 时给出中文提示', async () => {
+    const { createCliRunner } = await import('./claude.ts');
+    const r = await createCliRunner({ bin: '/nonexistent/claude' }).work({ cwd: process.cwd(), prompt: 'x', role: 'develop', budgetUsd: 1, onActivity: () => {} }).done;
+    expect(r.ok).toBe(false);
+    expect(r.text).toContain('无法启动 Claude Code');
+  });
+});

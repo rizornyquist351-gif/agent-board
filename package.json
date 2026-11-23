@@ -1,9 +1,18 @@
 {
   "name": "agent-board",
-  "version": "0.0.1",
+  "version": "1.0.0",
   "private": true,
+  "description": "许愿式的 agent 看板：一句话许愿，多个 Claude Code agent 在独立分支里分工干活，你点\"通过\"才合并",
   "type": "module",
-  "description": "多 agent 可视化看板",
+  "bin": {
+    "agent-board": "bin/agent-board.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "dist",
+    "README.md"
+  ],
   "scripts": {
     "dev": "node --run dev:server & node --run dev:web; wait",
     "dev:server": "tsx watch src/server/index.ts",
@@ -11,23 +20,28 @@
     "build": "vite build",
     "start": "tsx src/server/index.ts",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepare": "vite build"
   },
   "engines": {
     "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rizornyquist351-gif/agent-board.git"
+  },
+  "dependencies": {
+    "tsx": "^4.23.15"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.3.0",
-    "tsx": "^4.23.15",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "typescript": "^7.0.2",
     "vite": "^8.3.8",
     "vitest": "^5.1.1"
-  },
-  "dependencies": {
-    "react": "^19.3.1",
-    "react-dom": "^19.3.1"
   }
 }

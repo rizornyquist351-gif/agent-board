@@ -131,8 +131,12 @@ pre { background: var(--bg); padding: 8px; border-radius: 6px; overflow: auto; m
 .warnings ul { padding-left: 18px; overflow-wrap: anywhere; }
 
 /* ---------- 顶部、标签页 ---------- */
-.top .conn { margin-left: auto; }
-.project { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); }
+.top-right { margin-left: auto; display: inline-flex; gap: 14px; align-items: center; }
+.project {
+  display: inline-flex; gap: 6px; align-items: center; color: var(--text); font: inherit; font-size: 12px;
+  background: none; border: 1px solid transparent; border-radius: 8px; padding: 3px 6px; cursor: pointer;
+}
+.project:hover { border-color: var(--border); background: var(--panel); }
 .project code { background: var(--bg); border: 1px solid var(--border); padding: 0 6px; border-radius: 4px; }
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-top: 4px; }
 .tabs button {
@@ -300,6 +304,29 @@ button.role:hover { border-color: currentColor; }
 .result-skipped { border-left-color: var(--muted); }
 .result .stat-block { margin-top: 6px; }
 .result details summary { cursor: pointer; color: var(--research); }
+
+/* ---------- 第 3 阶段：自检、切换项目 ---------- */
+.health { max-width: none; }
+.checks { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.checks li { display: grid; grid-template-columns: 18px 1fr; gap: 6px; }
+.checks li.ok > span { color: var(--ok); }
+.checks li.bad > span { color: var(--bad); font-weight: 700; }
+.switcher {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  padding: 12px 14px; margin-top: 12px; display: grid; gap: 8px; box-shadow: var(--shadow);
+}
+.notice .switcher { box-shadow: none; margin-top: 4px; }
+.switcher-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.switcher-row input { flex: 1; min-width: 200px; width: auto; }
+.switcher-row button { border: 1px solid var(--border); background: var(--panel); color: var(--text); padding: 6px 14px; border-radius: 8px; cursor: pointer; }
+.switcher-row button.primary { background: var(--accent); border-color: var(--accent); color: var(--panel); }
+.recent { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.recent .example {
+  font-size: 12px; padding: 2px 10px; border-radius: 99px; background: var(--bg); color: var(--muted);
+  border: 1px solid var(--border); cursor: pointer;
+}
+.recent .example:hover { color: var(--accent); border-color: var(--accent); }
+.mode-note { margin: 10px 0 0; }
 
 @media (max-width: 720px) {
   .summary { grid-template-columns: 1fr 1fr; }

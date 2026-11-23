@@ -100,3 +100,26 @@ export interface RunningAgent {
   doing?: string;
   since: number;
 }
+
+/** 启动自检的一项 */
+export interface HealthCheck {
+  id: string;
+  ok: boolean;
+  label: string;
+  /** 不通过时告诉用户怎么办 */
+  fix?: string;
+}
+
+/** 服务器推给网页的许愿数据 */
+export interface WishesPayload {
+  project: ProjectInfo;
+  fake: boolean;
+  wishes: Wish[];
+  agents: RunningAgent[];
+  maxAgents: number;
+  health: HealthCheck[];
+  /** 最近打开过的项目，方便切换 */
+  recent: string[];
+  /** 执行 agent 实际使用的权限模式（auto 不可用时会自动降级） */
+  permissionMode: string;
+}
