@@ -10,9 +10,10 @@
 
 - [x] 前期调研（见 `docs/RESEARCH.md`）
 - [x] 写好 CLAUDE.md / ROADMAP / PROGRESS / DECISIONS
-- [ ] 用户确认整体目标与「明确不做」清单
-- [ ] 确定技术选型（见 `docs/DECISIONS.md` 中的待定项）
-- [ ] 调研 Claude Code Agent Teams 任务列表的存储位置与格式（第 0 阶段的数据来源）
+- [x] 用户确认整体目标与「明确不做」清单
+- [x] 确定技术选型：TypeScript 全栈、本地运行（D6、D7）
+- [x] 调研 Claude Code Agent Teams 任务列表的存储位置与格式（见 RESEARCH.md 第五节）
+- [ ] 用户确认数据来源与实时更新方式（DECISIONS.md 待定项）
 
 ## 第 0 阶段：只读可视化（预计 1–2 天）
 

@@ -36,7 +36,50 @@
 
 "80% 做不完"之类的统计大多无可靠来源，但原因一致：**范围膨胀、没定义"做完"**。对策：每个功能问"是核心必需还是看起来很酷"；第一版只做能验证想法的最小版本。来源：[DEV](https://dev.to/teamcamp/the-side-project-paradox-why-80-fail-and-how-to-be-the-20-39jn)、[MindStudio](https://mindstudio.ai/blog/why-side-projects-never-ship)
 
-## 五、未完成的调研
+## 五、第 0 阶段数据来源：Claude Code 任务数据（2026-11-23 调研，Claude Code 2.1.330）
+
+### 官方文档说明的（[agent-teams](https://code.claude.com/docs/en/agent-teams)）
+
+| 数据 | 路径 | 生命周期 |
+|---|---|---|
+| 任务列表 | `~/.claude/tasks/{team-name}/` | 会话结束后保留，按 `cleanupPeriodDays` 清理 |
+| 团队配置 | `~/.claude/teams/{team-name}/config.json` | **会话结束时删除** |
+| 每个 agent 的信箱 | `~/.claude/teams/{team-name}/inboxes/{agent-name}.json` | 同上 |
+
+- 团队名 = `session-` + 会话 ID 前 8 位。
+- `config.json` 有 `members` 数组：每个成员的名字、agent ID、agent 类型（组长固定为 `team-lead`）。
+- 任务三种状态：`pending` / `in_progress` / `completed`；"阻塞"只是显示状态。认领用文件锁防竞争。
+- 可用于观察的 hooks：`TaskCreated`、`TaskCompleted`、`TeammateIdle`。
+- 限制：实验性功能；需交互式会话（`-p` 模式不会创建队友）；一个会话一个团队；任务状态可能滞后；队友有时忘记标记完成。
+- **文档没有说明任务文件的字段格式，也没说直接读这些文件是受支持的接口。**
+
+### 实测得到的（用 Claude Code 自带任务工具创建了一个测试任务）
+
+- 普通会话（不开 Agent Teams）也会写任务文件：`~/.claude/tasks/{会话 ID}/`
+- **每个任务一个文件** `{id}.json`，目录下另有一个空的 `.lock` 文件。
+- 任务文件内容：
+
+```json
+{
+  "id": "1",
+  "subject": "调研 Agent Teams 任务数据格式",
+  "description": "……",
+  "activeForm": "调研任务数据格式",
+  "status": "in_progress",
+  "blocks": [],
+  "blockedBy": [],
+  "metadata": { "probe": true },
+  "owner": "main"
+}
+```
+
+- `metadata` 可以放任意字段 → 以后可以用来存"角色""验收标准"等，不用另建存储。
+
+### 风险
+
+格式是实测得来、未被官方文档承诺，Claude Code 升级可能改变 → 读取逻辑必须**集中在一个适配器模块里**，字段缺失或多出时容错，不能让整个看板崩掉。
+
+## 六、未完成的调研
 
 - 各小项目的活跃度（最近提交、issue 数）未逐一核实。
-- Claude Code Agent Teams 任务数据的存储位置与格式（第 0 阶段开工前必须查清）。
+- 开启 Agent Teams 后 `config.json` 的完整格式（需要在交互式会话中实测）。
