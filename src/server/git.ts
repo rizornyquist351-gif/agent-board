@@ -90,8 +90,11 @@ export async function mergeInto(dir: string, branch: string, message: string): P
 }
 
 /** 把工作区的全部改动提交；没有改动返回 false。 */
+/** 不该提交的临时文件：agent 跑代码、跑测试时常会生成（不改用户的 .gitignore，只在提交时排除） */
+export const JUNK = ['**/__pycache__/**', '**/*.pyc', '**/.pytest_cache/**', '**/node_modules/**', '**/.DS_Store', '**/Thumbs.db', '**/.venv/**', '**/*.log'];
+
 export async function commitAll(dir: string, message: string): Promise<boolean> {
-  await git(dir, 'add', '-A');
+  await git(dir, 'add', '-A', '--', '.', ...JUNK.map((p) => `:(exclude,glob)${p}`));
   const status = await git(dir, 'status', '--porcelain');
   if (!status) return false;
   await git(dir, '-c', 'user.name=agent-board', '-c', 'user.email=agent-board@localhost', 'commit', '-q', '-m', message);

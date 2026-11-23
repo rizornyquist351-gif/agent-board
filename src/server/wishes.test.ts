@@ -83,6 +83,17 @@ describe('WishManager', () => {
     expect(sh('worktree', 'list').split('\n')).toHaveLength(1);
   });
 
+  it('提交时排除临时文件', async () => {
+    const { commitAll, git } = await import('./git.ts');
+    const { mkdir } = await import('node:fs/promises');
+    await mkdir(join(project, '__pycache__'), { recursive: true });
+    await writeFile(join(project, '__pycache__', 'x.cpython-313.pyc'), 'junk');
+    await writeFile(join(project, 'debug.log'), 'junk');
+    await writeFile(join(project, 'real.py'), 'print(1)\n');
+    expect(await commitAll(project, 'test')).toBe(true);
+    expect((await git(project, 'show', '--name-only', '--format=', 'HEAD')).split('\n')).toEqual(['real.py']);
+  });
+
   it('并行开发改了同一个文件：冲突后自动重做并成功', async () => {
     const m = await manager({ stepMs: 2, sameFile: true });
     const w = m.create('制造冲突');

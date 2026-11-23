@@ -9,6 +9,9 @@ describe('describeTool', () => {
     expect(describeTool('Bash', { command: 'ls -la' })).toBe('正在运行命令：ls -la');
     expect(describeTool('WebSearch', { query: 'vite' })).toBe('正在上网搜：vite');
     expect(describeTool('Mystery', {})).toBe('正在使用工具 Mystery');
+    // 工作目录里的文件显示相对路径，不暴露看板内部的目录名
+    expect(describeTool('Read', { file_path: '/home/u/.agent-board/worktrees/p-1/abc/t2/src/convert.py' }, '/home/u/.agent-board/worktrees/p-1/abc/t2')).toBe('正在看 src/convert.py');
+    expect(describeTool('Edit', { file_path: 'docs/a.md' }, '/x')).toBe('正在修改 docs/a.md');
   });
 });
 

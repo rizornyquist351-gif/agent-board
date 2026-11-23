@@ -30,10 +30,14 @@ export interface Runner {
 
 // ---------- 把工具调用翻译成大白话 ----------
 
-function shortPath(p: unknown): string {
+/** 显示用的路径：在工作目录里的，显示相对路径；否则显示最后两段 */
+function shortPath(p: unknown, cwd?: string): string {
   if (typeof p !== 'string') return '';
-  const parts = p.split(/[\\/]/).filter(Boolean);
-  return parts.slice(-2).join('/');
+  const norm = p.replace(/\\/g, '/');
+  const base = cwd?.replace(/\\/g, '/').replace(/\/$/, '');
+  if (base && norm.startsWith(`${base}/`)) return norm.slice(base.length + 1);
+  if (!norm.startsWith('/') && !/^[a-zA-Z]:/.test(norm)) return norm;
+  return norm.split('/').filter(Boolean).slice(-2).join('/');
 }
 
 /** 截断但保留换行（用于报告） */
@@ -46,17 +50,17 @@ function clip(s: string, n = 80): string {
   return one.length > n ? `${one.slice(0, n - 1)}…` : one;
 }
 
-export function describeTool(name: string, input: Record<string, unknown>): string {
+export function describeTool(name: string, input: Record<string, unknown>, cwd?: string): string {
   const str = (k: string) => (typeof input[k] === 'string' ? (input[k] as string) : '');
   switch (name) {
     case 'Read':
-      return `正在看 ${shortPath(input.file_path)}`;
+      return `正在看 ${shortPath(input.file_path, cwd)}`;
     case 'Write':
-      return `正在写 ${shortPath(input.file_path)}`;
+      return `正在写 ${shortPath(input.file_path, cwd)}`;
     case 'Edit':
     case 'MultiEdit':
     case 'NotebookEdit':
-      return `正在修改 ${shortPath(input.file_path ?? input.notebook_path)}`;
+      return `正在修改 ${shortPath(input.file_path ?? input.notebook_path, cwd)}`;
     case 'Bash':
       return `正在运行命令：${clip(str('description') || str('command'))}`;
     case 'Glob':
@@ -80,13 +84,13 @@ export function describeTool(name: string, input: Record<string, unknown>): stri
 }
 
 /** 解析一行 stream-json 事件，返回其中的活动（可能没有）。 */
-export function activitiesFromEvent(e: unknown, now = Date.now()): Activity[] {
+export function activitiesFromEvent(e: unknown, now = Date.now(), cwd?: string): Activity[] {
   if (typeof e !== 'object' || e === null) return [];
   const ev = e as Record<string, any>;
   const out: Activity[] = [];
   if (ev.type === 'assistant' && Array.isArray(ev.message?.content)) {
     for (const c of ev.message.content) {
-      if (c?.type === 'tool_use') out.push({ at: now, kind: 'tool', text: describeTool(String(c.name), c.input ?? {}) });
+      if (c?.type === 'tool_use') out.push({ at: now, kind: 'tool', text: describeTool(String(c.name), c.input ?? {}, cwd) });
       else if (c?.type === 'text' && typeof c.text === 'string' && c.text.trim()) out.push({ at: now, kind: 'text', text: clip(c.text, 200) });
     }
   } else if (ev.type === 'user' && Array.isArray(ev.message?.content)) {
@@ -186,7 +190,7 @@ export function createCliRunner(opts: CliOptions = {}): Runner {
       const tools = role === 'research' ? ['--tools', RESEARCH_TOOLS, '--allowedTools', 'WebSearch', 'WebFetch'] : [];
       const args = ['-p', prompt, '--output-format', 'stream-json', '--verbose', ...tools,
         '--permission-mode', opts.permissionMode ?? 'auto', '--max-budget-usd', String(budgetUsd), ...model];
-      return runCli(bin, args, cwd, (ev) => activitiesFromEvent(ev).forEach(onActivity));
+      return runCli(bin, args, cwd, (ev) => activitiesFromEvent(ev, Date.now(), cwd).forEach(onActivity));
     },
   };
 }
@@ -227,6 +231,7 @@ export function planPrompt(wish: string): string {
     '- 每个任务选一个角色：research（调研员：只读代码、可以上网查资料，产出一份报告，不改文件）或 develop（开发者：改代码）。只有确实需要先查资料或先摸清情况时才安排调研。',
     '- 用 dependsOn 写清依赖：必须等哪些任务做完才能开始（填排在前面的任务序号，从 1 开始）。没有依赖的任务会同时开工。',
     '- 会改到同一批文件的开发任务不能同时做，必须用 dependsOn 排成先后。',
+    '- 调研任务的产出就是一份直接回答的报告，不要让它写文件；需要落到项目里的内容交给开发任务。',
     '- 每个任务写清：目标、产出、边界（不要碰什么）、验收标准。',
     '- 全部用中文，用普通人看得懂的话。',
     '- 你只负责规划，不要修改任何文件。',
@@ -318,7 +323,8 @@ export function workPrompt(wish: string, task: PlannedTask, total: number, previ
   lines.push('', '## 规则');
   if (research) {
     lines.push(
-      '- 你只能读代码、上网查资料，不要修改任何文件。',
+      '- 你只能读代码、上网查资料，不要修改任何文件，也不要尝试把报告存成文件。',
+      '- 全程用中文说明你在做什么。',
       '- 只做本任务。',
       '- 最后直接输出调研报告（中文、Markdown）：结论放最前面，然后是依据和建议，引用网上资料时附上链接。这份报告会交给后续的开发者。',
     );
@@ -327,6 +333,8 @@ export function workPrompt(wish: string, task: PlannedTask, total: number, previ
       '- 当前目录是专门给你建的独立 git 工作区，放心修改。其他同事在别的工作区里同时干活。',
       '- 不要执行 git commit、git push、切换或新建分支——看板会自动提交并合并，用户审核后才会进入正式项目。',
       '- 只做本任务，不要顺手改不相关的文件，免得和同事的改动冲突。',
+      '- 运行代码或测试产生的临时文件（缓存、日志等）做完后删掉。',
+      '- 全程用中文说明你在做什么。',
       '- 做完后用几句中文总结：做了什么、怎么验证的、有什么需要用户注意。',
     );
   }
