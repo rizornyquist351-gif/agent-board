@@ -25,10 +25,15 @@ export class WishManager {
   private listeners = new Set<() => void>();
   private saveTimer?: NodeJS.Timeout;
 
+  /**
+   * @param worktreeRoot worktree 放在哪里。必须在项目目录之外：放在项目里面的话，
+   *   用户项目的测试 / 构建工具扫描整个目录时会把 worktree 里的副本也算进去。
+   */
   constructor(
     readonly project: string,
     private runner: Runner,
     private budgets: Budgets,
+    private worktreeRoot: string,
   ) {}
 
   get boardDir() {
@@ -36,7 +41,7 @@ export class WishManager {
   }
 
   private worktreeDir(id: string) {
-    return join(this.boardDir, 'worktrees', id);
+    return join(this.worktreeRoot, id);
   }
 
   // ---------- 读写状态 ----------

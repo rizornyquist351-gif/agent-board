@@ -24,7 +24,7 @@ async function until(m: WishManager, id: string, status: WishStatus): Promise<Wi
 const managers: WishManager[] = [];
 
 async function manager(fake: FakeOptions = {}) {
-  const m = new WishManager(project, createFakeRunner({ stepMs: 1, ...fake }), { planUsd: 0.5, taskUsd: 2 });
+  const m = new WishManager(project, createFakeRunner({ stepMs: 1, ...fake }), { planUsd: 0.5, taskUsd: 2 }, `${project}-worktrees`);
   await m.load();
   managers.push(m);
   return m;
@@ -40,6 +40,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await Promise.all(managers.splice(0).map((m) => m.close()));
   await rm(project, { recursive: true, force: true });
+  await rm(`${project}-worktrees`, { recursive: true, force: true });
 });
 
 describe('WishManager', () => {
@@ -55,8 +56,9 @@ describe('WishManager', () => {
     expect(w.tasks.every((t) => t.status === 'done')).toBe(true);
     expect(w.tasks[0].activity.some((a) => a.kind === 'tool')).toBe(true);
     expect(w.diffStat).toContain('NOTES.md');
-    // 审核前，用户的工作区没有被动过
+    // 审核前，用户的工作区没有被动过；worktree 在项目目录之外
     expect(existsSync(join(project, 'NOTES.md'))).toBe(false);
+    expect(existsSync(join(`${project}-worktrees`, w.id, 'NOTES.md'))).toBe(true);
     // 每个任务一个提交
     expect(sh('log', '--oneline', `main..${w.branch}`).split('\n')).toHaveLength(2);
 

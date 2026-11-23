@@ -1,59 +1,115 @@
-// 看板服务器（只用 Node 内置模块）：
-//   GET /api/state    当前快照（JSON）
-//   GET /api/events   SSE 实时推送：连上立即发一次快照，之后数据有变化就推送（D10）
-//   其他路径          生产模式下提供 dist/web 里构建好的网页
+// 看板服务器（只用 Node 内置模块）。
+//
+// 启动：npm start -- [项目目录]      也可用环境变量 AGENT_BOARD_PROJECT；默认为当前目录
+//
+// 接口：
+//   GET  /api/events                 SSE：project+wishes（许愿）与 state（观察 Claude Code 任务）
+//   GET  /api/state                  观察视图快照
+//   POST /api/wishes                 {text}           许愿
+//   POST /api/wishes/:id/start       {tasks?}         确认并开始（可带修改后的任务清单）
+//   POST /api/wishes/:id/{retry,skip,stop,approve,discard,remove}
 //
 // 环境变量：
-//   PORT        默认 4317
-//   CLAUDE_DIR  Claude Code 数据目录，默认 ~/.claude
+//   PORT                      默认 4317
+//   CLAUDE_DIR                Claude Code 数据目录，默认 ~/.claude
+//   AGENT_BOARD_FAKE=1        用假 agent（不调用 Claude、不花钱），用于演示
+//   AGENT_BOARD_PERMISSION    执行 agent 的权限模式，默认 auto
+//   AGENT_BOARD_MODEL         指定模型
+//   AGENT_BOARD_PLAN_BUDGET   规划费用上限（美元），默认 0.5
+//   AGENT_BOARD_TASK_BUDGET   每个任务费用上限（美元），默认 2
+//
+// 安全（D13）：只监听 127.0.0.1；拒绝 Host 不是本机、或 Origin 来自其他网站的请求；
+// 写操作必须是 JSON 请求。这样别的网站无法替用户"许愿"。
 
+import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
-import { createServer, type ServerResponse } from 'node:http';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { homedir } from 'node:os';
 import { extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { BoardState } from '../shared/types.ts';
+import type { PlannedTask, ProjectInfo } from '../shared/wish.ts';
 import { readBoardState } from './adapter.ts';
+import { createCliRunner } from './claude.ts';
+import { createFakeRunner } from './fake-runner.ts';
+import { projectInfo } from './git.ts';
+import { WishError, WishManager } from './wishes.ts';
 
 const PORT = Number(process.env.PORT ?? 4317);
 const CLAUDE_DIR = resolve(process.env.CLAUDE_DIR ?? join(homedir(), '.claude'));
+const PROJECT_ARG = resolve(process.argv[2] ?? process.env.AGENT_BOARD_PROJECT ?? process.env.INIT_CWD ?? process.cwd());
+const FAKE = process.env.AGENT_BOARD_FAKE === '1';
 const WEB_DIR = fileURLToPath(new URL('../../dist/web/', import.meta.url));
-// 用轮询而不是 fs.watch：任务目录会在运行中被创建和删除，fs.watch 处理这种情况不可靠；
-// 任务文件很小，每秒读一遍的开销可以忽略。
+// 观察视图用轮询而不是 fs.watch：任务目录会在运行中被创建和删除，fs.watch 处理这种情况不可靠。
 const POLL_MS = 1000;
 const HEARTBEAT_MS = 25_000;
+const WISH_PUSH_MS = 200;
 
-let current: BoardState | undefined;
-let currentKey = '';
 const clients = new Set<ServerResponse>();
 
-/** 用于判断"有没有变化"的内容，去掉每次都会变的 generatedAt。 */
-function contentKey(s: BoardState): string {
-  return JSON.stringify({ ...s, generatedAt: 0 });
+function broadcast(event: string, data: unknown) {
+  const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const res of clients) res.write(msg);
 }
 
-function send(res: ServerResponse, state: BoardState) {
-  res.write(`event: state\ndata: ${JSON.stringify(state)}\n\n`);
-}
+// ---------- 观察视图（第 0 阶段） ----------
 
-async function refresh() {
+let observed: BoardState | undefined;
+let observedKey = '';
+
+async function refreshObserved() {
   try {
     const next = await readBoardState(CLAUDE_DIR);
-    const key = contentKey(next);
-    if (key === currentKey) return;
-    current = next;
-    currentKey = key;
-    for (const res of clients) send(res, next);
+    const key = JSON.stringify({ ...next, generatedAt: 0 });
+    if (key === observedKey) return;
+    observed = next;
+    observedKey = key;
+    broadcast('state', next);
   } catch (err) {
-    console.error('读取数据失败：', err);
+    console.error('读取 Claude Code 任务失败：', err);
   }
 }
 
-async function getState(): Promise<BoardState> {
-  if (!current) await refresh();
-  return current!;
+// ---------- 许愿（第 1 阶段） ----------
+
+let project: ProjectInfo = await projectInfo(PROJECT_ARG);
+let manager: WishManager | undefined;
+
+if (!project.problem) {
+  const runner = FAKE
+    ? createFakeRunner()
+    : createCliRunner({ permissionMode: process.env.AGENT_BOARD_PERMISSION ?? 'auto', model: process.env.AGENT_BOARD_MODEL });
+  // worktree 放在项目之外：~/.agent-board/worktrees/{项目名}-{路径哈希}/
+  const hash = createHash('sha1').update(project.path).digest('hex').slice(0, 8);
+  const worktreeRoot = join(homedir(), '.agent-board', 'worktrees', `${project.name}-${hash}`);
+  manager = new WishManager(
+    project.path,
+    runner,
+    { planUsd: Number(process.env.AGENT_BOARD_PLAN_BUDGET ?? 0.5), taskUsd: Number(process.env.AGENT_BOARD_TASK_BUDGET ?? 2) },
+    worktreeRoot,
+  );
+  await manager.load();
+  // 活动更新很频繁，合并成每 200ms 最多推送一次
+  let pending: NodeJS.Timeout | undefined;
+  manager.onChange(() => {
+    pending ??= setTimeout(() => {
+      pending = undefined;
+      void pushWishes();
+    }, WISH_PUSH_MS);
+  });
 }
+
+async function wishesPayload() {
+  if (manager) project = await projectInfo(project.path); // 分支可能变了
+  return { project, fake: FAKE, wishes: manager?.list() ?? [] };
+}
+
+async function pushWishes() {
+  broadcast('wishes', await wishesPayload());
+}
+
+// ---------- HTTP ----------
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -62,6 +118,78 @@ const MIME: Record<string, string> = {
   '.svg': 'image/svg+xml',
   '.json': 'application/json',
 };
+
+function json(res: ServerResponse, status: number, body: unknown) {
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+  res.end(JSON.stringify(body));
+}
+
+function isLocalHost(value: string | undefined): boolean {
+  if (!value) return false;
+  const host = value.replace(/^https?:\/\//, '').replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+}
+
+/** 防止其他网站或 DNS 重绑定攻击调用本地接口。 */
+function allowed(req: IncomingMessage): boolean {
+  if (!isLocalHost(req.headers.host)) return false;
+  const origin = req.headers.origin;
+  return !origin || isLocalHost(origin);
+}
+
+async function readBody(req: IncomingMessage): Promise<any> {
+  if (!String(req.headers['content-type'] ?? '').startsWith('application/json')) throw new WishError('请求格式不对');
+  let size = 0;
+  const chunks: Buffer[] = [];
+  for await (const c of req) {
+    size += c.length;
+    if (size > 100_000) throw new WishError('内容太长');
+    chunks.push(c);
+  }
+  try {
+    return chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {};
+  } catch {
+    throw new WishError('请求内容不是有效的 JSON');
+  }
+}
+
+async function handleWishAction(req: IncomingMessage, res: ServerResponse, pathname: string) {
+  if (!manager) return json(res, 409, { error: project.problem });
+  const body = await readBody(req);
+  if (pathname === '/api/wishes') {
+    const w = manager.create(String(body.text ?? ''));
+    return json(res, 200, { id: w.id });
+  }
+  const m = pathname.match(/^\/api\/wishes\/([\w-]+)\/(start|retry|skip|stop|approve|discard|remove)$/);
+  if (!m) return json(res, 404, { error: '没有这个操作' });
+  const [, id, action] = m;
+  switch (action) {
+    case 'start': {
+      const tasks = Array.isArray(body.tasks) ? (body.tasks as PlannedTask[]) : undefined;
+      await manager.start(id, tasks);
+      break;
+    }
+    case 'retry':
+      await manager.retry(id);
+      break;
+    case 'skip':
+      await manager.skip(id);
+      break;
+    case 'stop':
+      manager.stop(id);
+      break;
+    case 'approve':
+      await manager.approve(id);
+      break;
+    case 'discard':
+      await manager.discard(id);
+      break;
+    case 'remove':
+      manager.remove(id);
+      break;
+  }
+  json(res, 200, { ok: true });
+}
 
 async function serveStatic(pathname: string, res: ServerResponse) {
   const rel = normalize(decodeURIComponent(pathname)).replace(/^([/\\]|\.\.)+/, '');
@@ -84,37 +212,52 @@ async function serveStatic(pathname: string, res: ServerResponse) {
 }
 
 const server = createServer(async (req, res) => {
-  const { pathname } = new URL(req.url ?? '/', 'http://localhost');
+  try {
+    if (!allowed(req)) return json(res, 403, { error: '只允许从本机的看板页面访问' });
+    const { pathname } = new URL(req.url ?? '/', 'http://localhost');
 
-  if (pathname === '/api/state') {
-    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-    res.end(JSON.stringify(await getState()));
-    return;
+    if (req.method === 'POST' && pathname.startsWith('/api/wishes')) return await handleWishAction(req, res, pathname);
+
+    if (pathname === '/api/state') {
+      if (!observed) await refreshObserved();
+      return json(res, 200, observed);
+    }
+
+    if (pathname === '/api/events') {
+      res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', connection: 'keep-alive' });
+      res.write('retry: 2000\n\n');
+      clients.add(res);
+      req.on('close', () => clients.delete(res));
+      if (!observed) await refreshObserved();
+      res.write(`event: wishes\ndata: ${JSON.stringify(await wishesPayload())}\n\n`);
+      res.write(`event: state\ndata: ${JSON.stringify(observed)}\n\n`);
+      return;
+    }
+
+    if (pathname.startsWith('/api/')) return json(res, 404, { error: '没有这个接口' });
+    await serveStatic(pathname, res);
+  } catch (err) {
+    if (err instanceof WishError) return json(res, 400, { error: err.message });
+    console.error(err);
+    if (!res.headersSent) json(res, 500, { error: `服务器出错：${(err as Error).message}` });
   }
-
-  if (pathname === '/api/events') {
-    res.writeHead(200, {
-      'content-type': 'text/event-stream; charset=utf-8',
-      'cache-control': 'no-store',
-      connection: 'keep-alive',
-    });
-    res.write('retry: 2000\n\n');
-    clients.add(res);
-    send(res, await getState());
-    req.on('close', () => clients.delete(res));
-    return;
-  }
-
-  await serveStatic(pathname, res);
 });
 
-setInterval(refresh, POLL_MS);
+setInterval(refreshObserved, POLL_MS);
 // 定期发注释行，防止代理或浏览器因长时间无数据断开连接
 setInterval(() => {
   for (const res of clients) res.write(': ping\n\n');
 }, HEARTBEAT_MS);
 
-server.listen(PORT, () => {
+for (const sig of ['SIGINT', 'SIGTERM'] as const) {
+  process.on(sig, async () => {
+    await manager?.close();
+    process.exit(0);
+  });
+}
+
+server.listen(PORT, '127.0.0.1', () => {
   console.log(`agent-board 已启动：http://localhost:${PORT}`);
-  console.log(`读取数据目录：${CLAUDE_DIR}`);
+  if (project.problem) console.log(`⚠ 项目 ${project.path} 暂时不能许愿：${project.problem}`);
+  else console.log(`许愿的项目：${project.path}（当前分支 ${project.branch}）${FAKE ? ' · 演示模式（假 agent）' : ''}`);
 });
